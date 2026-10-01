@@ -1,10 +1,14 @@
-"""Concrete awsiot Washer — translates the MQTT state to the Washer ABC.
+"""Concrete awsiot Washer: translates the MQTT state to the Washer ABC.
 
-The AWS IoT state payload nests the laundry cavity under a `washer` key and
-uses camelCase/attribute-style values (see `tests/data/awsiot/washer_state.json`
-captured from a Maytag MFW7020RF0). The read-only accessors below decode that
-state; setters are intentionally absent until laundry capability profiles are
-available (the microwave backend is the reference for how that will work).
+The AWS IoT state nests the washer under a `washer` key, with camelCase string
+values. Every Washer carries the capability profile of its own part, which is
+what routed it here. The accessors below only read the state; there are no
+setters yet.
+
+A wire value is decoded only when an AWS laundry appliance has reported it, or,
+for a phase, when it spells the flag's own word ("fill", "filling") and a real
+capability file enumerates it. Anything else reads as unknown (None) or, for a
+phase flag, False.
 """
 
 from typing import override
@@ -32,18 +36,23 @@ _MACHINE_STATE_MAP: dict[str, MachineState] = {
     "end": MachineState.Complete,
 }
 
-# `washer.currentPhase` values used to derive the cycle status flags. "wash"
-# is confirmed from a live running-cycle capture (Maytag MFW7020RF0); the
-# rest are the phase names enumerated by the MFW7020RF0 capability file's
-# per-option "changeable" lists, and still want confirmation from a live
-# cycle. Phases the file declares but the ABC has no flag for: addGarment,
-# default, postCare.
-_PHASES_SENSING = ("sense", "preSense")
-_PHASES_FILLING = ("fill",)
-_PHASES_SOAKING = ("preWash",)
-_PHASES_WASHING = ("wash",)
-_PHASES_RINSING = ("rinse", "extraRinse")
-_PHASES_SPINNING = ("spin", "intermediateSpin")
+# `washer.currentPhase` -> cycle status flag. Front-loads report the stem; the
+# top-load W11771387 file enumerates the gerund. Sources:
+# - live MFW7020RF0 quick wash (sense, addGarment, wash, rinse, extraRinse,
+#   rinse, spin): https://github.com/abmantis/whirlpool-sixth-sense/pull/167#discussion_r3989687563
+# - W11771387 (MTW7205RR0) file: https://github.com/abmantis/whirlpool-sixth-sense/issues/117#issuecomment-4246673850
+# - W11812024 (MFW7020RF0) file, vendored as tests/data/awsiot/washer_capability.json:
+#   https://github.com/abmantis/whirlpool-sixth-sense/pull/167#issuecomment-5616074371
+# - live MTW7205RR0 rinse: https://github.com/pickerin/maytag_laundry_homeassistant/blob/5ea31accfd67ff21aaf8b132b6efd4bd2f913c30/TS_APPLIANCE_API.md#L212
+# Left unmapped, so every flag reads False: addGarment and default (no flag),
+# and preSense, intermediateSpin and preWash, which files enumerate but no
+# washer has reported; preWash could be a soak or a wash.
+_PHASES_SENSING = ("sense", "sensing")  # sense live; sensing in W11771387
+_PHASES_FILLING = ("fill", "filling")  # fill in W11812024; filling in W11771387
+_PHASES_SOAKING: tuple[str, ...] = ()  # see get_cycle_status_soaking
+_PHASES_WASHING = ("wash", "washing")  # wash live; washing in W11771387
+_PHASES_RINSING = ("rinse", "extraRinse")  # both live, extraRinse between rinses
+_PHASES_SPINNING = ("spin",)  # live
 
 
 class Washer(BaseWasher, Appliance):
@@ -95,6 +104,13 @@ class Washer(BaseWasher, Appliance):
 
     @override
     def get_cycle_status_soaking(self) -> bool | None:
+        """Always False while a phase is reported; None when it is absent.
+
+        No reported or enumerated phase is known to mean soaking: preWash
+        could be a soak or a wash, and no washer has reported it. This still
+        answers instead of raising, because Home Assistant reads all six
+        phase flags on every update while the washer runs.
+        """
         return self._phase_is(*_PHASES_SOAKING)
 
     @override
