@@ -260,3 +260,9 @@ class AppliancesManager:
             LOGGER.warning("Received message for unknown appliance %s", said)
             return
         appliance.update_state(state)
+        # Presence events fire only when an appliance connects or disconnects,
+        # so one that was already connected when this client subscribed never
+        # gets one. Its state reply or push counts as online instead. Set after
+        # the merge, so the callback that makes it available sees the new
+        # state; update_online calls the callbacks only on a change.
+        appliance.update_online(True)
