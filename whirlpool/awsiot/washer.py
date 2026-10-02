@@ -13,6 +13,7 @@ supports_dispense_level() is False and get_dispense_1_level() raises
 NotImplementedError.
 """
 
+import time
 from typing import override
 
 from ..types import ApplianceInfo
@@ -152,8 +153,26 @@ class Washer(BaseWasher, Appliance):
 
     @override
     def get_time_remaining(self) -> int | None:
-        return self._get_path_int("washer", "cycleTime", "time")
+        """Seconds until the running cycle's predicted end, never below 0.
+
+        cycleTime.time is not read. On a dryer, which shares this schema, it
+        held the cycle's full length from start to end:
+        https://github.com/home-assistant/core/issues/151547#issuecomment-5658124608
+        That dryer's end snapshot puts its finish 39 s past the predicted end.
+        """
+        time_complete = self.get_cycle_time_complete()
+        if time_complete is None:
+            return None
+        return max(0, time_complete - int(time.time()))
 
     @override
     def get_cycle_time_complete(self) -> int | None:
+        """cycleTime.timeComplete while a cycle runs; None otherwise.
+
+        Outside a running cycle the field is no prediction: an idle WFW5720RR0
+        reported one about 16 h after its capture was posted:
+        https://gist.github.com/jsltodo-jpg/ce305db31632a0397bd1034db4e9c1a8
+        """
+        if self._get_path_str("washer", "cycleTime", "state") != "running":
+            return None
         return self._get_path_int("washer", "cycleTime", "timeComplete")
